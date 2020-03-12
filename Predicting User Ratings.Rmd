@@ -1,0 +1,170 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+Question 5: Basic R Programming for Big Data (20 Points)
+
+
+a)
+```{r}
+# load bigmemory library
+library(bigmemory)
+# open ratings data file in big matrix format
+ratings <- read.big.matrix(filename = "ratings.dat", sep=",", type = "integer",
+                           col.names = c("UserID", "ProfileID", "Rating"))
+```
+
+```{r}
+# calculate the weighted rank of each profile id used by IMDB. That is, for v = number of votes for profile, R=average rate for profile, m = the 250th largest number of ratings for a single profile (4182), C = mean over whole data, calculate (v/(v+m))*R+(m/(v+m))*C
+weighted.rank <- function(ProfileID) {
+  # get the indexes of all the ratings which have the same profileids
+  ratingIndexes <- mwhich(ratings, "ProfileID", ProfileID, "eq")
+  ratingIndexes
+  # get profile ratings of unique profiles
+  allProfileRatings <- ratings[ratingIndexes, ]
+  allProfileRatings
+  # calculate mean of profile ratings
+  R <- mean(allProfileRatings[,3])
+  # calculate get the number of votes for the given profile
+  v <- nrow(allProfileRatings)
+  # m
+  m <- 4182
+  # get mean of whole data
+  C <- mean(ratings[,3])
+  # calculate weighted rank
+  weightedrank <- (v/(v+m))*R+(m/(v+m))*C
+  # return the weighted rank
+  return(weightedrank)
+}
+
+```
+
+```{r}
+# get all profiles rated by user 100
+profilerates <- mwhich(ratings, "UserID", 100, "eq")
+allProfileRates <- ratings[profilerates, ]
+weightedprofiles <- lapply(allProfileRates[,2], weighted.rank)
+weightedprofiles <- unlist(weightedprofiles)
+
+```
+
+```{r}
+# plot histogram of the scores calculated
+library(ggplot2)
+ggplot() + geom_histogram(aes(weightedprofiles), bins = 5)
+```
+
+
+
+```{r}
+# Lets find ratings of male users coming from New York and ratings of female users coming from California.
+load("users.Rdata") # load data
+# the data we have opened contains many variants of each state. In order to capture the full essence of the data, we should see all variants of States New York and California. We do this by grabbing all unique state names which begin with n or c
+grep("n", unique(User[,3]), value = TRUE)
+unique(User[,2], value=TRUE)
+grep("c", unique(User[,3]), value = TRUE)
+```
+
+```{r}
+# create dataset of males and new york
+newyorkm <- User[User$Gender %in% c("M") & User$State %in% c("New York", "new york", "nY", "ny"), ]
+# create dataset of females and california
+calif <- User[User$Gender %in% c("F") & User$State %in% c("ca", "california", "calif.", "caifornia", "ca.", "cA"), ]
+#get ratings of males coming from New York
+nym <- ratings[ratings[,1] %in% newyorkm$UserID, ]
+#get ratings of females coming from California
+calf <- ratings[ratings[,1] %in% calif$UserID, ]
+nym <- data.frame(location_gender = "New York Males", rating = nym[, 3])
+calf <- data.frame(location_gender = "California Females", rating = calf[, 3])
+# bind datasets
+nycaliratings <- rbind(nym, calf)
+# plot boxplot comparing data
+ggplot(nycaliratings, aes(x=location_gender, y=rating)) + geom_boxplot()
+```
+
+Spread is similar, there are no outliers and it appears ratings of females coming from California have a higher rating than ratings of males which are coming from New York. 
+
+
+Now lets begin attempting to predict user's rating for a profile. We seek to create a model for predicting user a's rating on profile b. This will be done using a Multiple Linear Model of 
+prediction = x1 + x2(Avg rating given by user a) + x3(Avg rating given to profile b) + error
+
+```{r}
+# This subsection is intellectual property of Qiang Sun
+X <- ratings
+N=3000000 # number of rating records
+Nu=135359 # maximum of UserID
+Np=220970 # maximum of ProfileID
+user.rat=rep(0,Nu) # user.rat[i] denotes the sum of ratings given by user i
+user.num=rep(0,Nu) # user.num[i] denotes the number of ratings given by user i
+profile.rat=rep(0,Np) # profile.rat[i] denotes the sum of ratings given to profile i
+profile.num=rep(0,Np) # user.rat[i] denotes the number of ratings given to profile i
+# In each iteration, we update the four arrays, i.e. user.rat, user.num, profile.rat and profile.num, using one rating record.
+for (i in 1:N) { 
+  user.rat[X[i,'UserID']]=user.rat[X[i,'UserID']]+X[i,'Rating'] # The matrix X   here comes from the file ’ratings.dat’
+  user.num[X[i,'UserID']]=user.num[X[i,'UserID']]+1
+  profile.rat[X[i,'ProfileID']]=profile.rat[X[i,'ProfileID']]+X[i,'Rating']
+  profile.num[X[i,'ProfileID']]=profile.num[X[i,'ProfileID']]+1 
+  if (i %% 10000==0) print(i/10000)
+}
+user.ave=user.rat/user.num #calculate user average
+profile.ave=profile.rat/profile.num #calculate profile average
+X1=X #compile data into X1 matrix
+```
+```{r}
+head(X)
+```
+
+
+```{r}
+options(bigmemory.allow.dimnames=TRUE)
+colnames(X1)=c('UsrAveRat','PrfAveRat','Rat')
+a <- X[, 1]
+X1[,"UsrAveRat"] = user.ave[X[, 1]]
+X1[,'PrfAveRat']=profile.ave[X[,2]] # X1 is the new data matrix we will work with in regression.
+
+```
+
+Compute the model based on our dataset
+```{r}
+library(biganalytics)
+head(X1)
+#test <- X1[1:20,]
+linreg.biglm <- biglm.big.matrix(Rat ~ UsrAveRat + PrfAveRat, data = X1)
+coefficients(linreg.biglm)
+summary(linreg.biglm)$rsq
+```
+
+predict any user's rating
+
+```{r}
+curdata <- read.big.matrix(filename = "ratings.dat", sep=",", type = "integer",
+                           col.names = c("UserID", "ProfileID", "Rating"))
+head(curdata)
+```
+```{r}
+unique(curdata[,1]) # Displays all possible UserIDs
+pred.userId <- readline(prompt="Enter UserID you would like to predict: ") # give UserID from list above in console
+unique(curdata[,2]) # Displays all possible ProfileIDs
+pred.profileId <- readline(prompt="Enter the profileID of the profile whose rating prediction will be given for your UserId: ") # give ProfileID from list above in console
+# convert inputs to integers
+pred.userId <- as.integer(pred.userId)
+pred.profileId <- as.integer(pred.profileId)
+# get average rating for the User
+avgUser <- curdata[curdata[,1] == pred.userId,]
+avgUser <- mean(avgUser[,3])
+# get the average rating given by profile
+avgProfile <- curdata[curdata[,2] == pred.profileId,]
+avgProfile <- mean(avgProfile[,3])
+# combine averages into a data frame
+topred <- merge(avgUser,avgProfile)
+colnames(topred) <- c("UsrAveRat", "PrfAveRat")
+
+# predict the rating
+prediction <- predict(linreg.biglm,newdata = topred)
+prediction
+
+# get real value (If no real value exists, this will return 0)
+curdata[(curdata[,1] == pred.userId) & (curdata[,2] == pred.profileId),3]
+
+```
